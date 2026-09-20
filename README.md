@@ -1,64 +1,39 @@
 # jrg
 
-検索キーワードと「探している処理の説明」を渡し、ripgrep の結果を Jev で順位付けするプロトタイプです。インデックスは作りません。
+**Intent-aware ripgrep results, reranked with Jev.** A native Rust CLI for humans and coding agents. No Python runtime or search index required.
+
+検索キーワードと「探している処理の説明」を渡し、ripgrep の候補を Jev の Noul で順位付けします。
 
 ```text
 rg --json → 前後5行の候補 → 近接領域を統合 → Jev Noul → 上位10件
 ```
 
-参照会話の v0 を実装しています。言語ごとの AST、関数単位の展開、二段階 rerank、MCP サーバーは対象外です。
+## インストール
 
-## セットアップ
-
-Python 3.11 以上と `rg` が必要です。実行時の Python 外部依存はありません。
+実行時に `rg` が必要です。Rust はソースからビルドする場合に必要です。
 
 ```bash
-# macOS で rg が未導入の場合
-brew install ripgrep
+# Homebrew（macOS / Linux）
+brew install sukobuto/tap/jrg
 
-# リポジトリ内で利用
-uv sync
-uv run jrg --help
-
-# または CLI としてインストール
-uv tool install .
-# pip install . も利用できます
+# Cargo（Rust 1.88 以上）
+cargo install jrg --locked
+# rg が未導入なら別途インストールしてください
 ```
 
-インストールせず `python3 -m jrg ...` でも実行できます。
+ビルド済みバイナリは [GitHub Releases](https://github.com/sukobuto/jrg/releases) から取得できます。アーカイブを展開して `jrg`（Windows は `jrg.exe`）を PATH の通った場所に置いてください。
 
-## まずローカルで試す
+開発用にはリポジトリ内で `cargo install --path . --locked`、または `cargo run -- ...` を使えます。
 
-```bash
-python3 -m jrg retry examples/retry_demo \
-  --about 'HTTPリクエスト失敗時に、ステータスによって再試行するか判断する処理' \
-  --dry-run --json --stats
+## プロジェクトで使う
+
+プロジェクトの `.jrgenv` にキーを設定します。
+
+```dotenv
+TYPESAFE_API_KEY=your-api-key
 ```
 
-`--dry-run` は候補一覧を表示します。通信せず、API キーも不要です。`relevance` は `null` で、`--top` と `--min-relevance` は適用しません。API に送る候補を一通り確認できます。
-
-通常の検索では、検索意図・候補のパス・行番号・ソース断片を TypeSafe API に送ります。
-
-```bash
-# 自分のキーを環境変数に設定します。.env の自動読み込みはしません。
-export TYPESAFE_API_KEY='your-api-key'
-
-python3 -m jrg retry examples/retry_demo \
-  --about 'HTTPリクエスト失敗時に、ステータスによって再試行するか判断する処理' \
-  --top 5 --stats
-```
-
-`.env` に `TYPESAFE_API_KEY` を設定した場合は、uv に明示的に読み込ませて実行できます。`.env` は Git の追跡対象から除外しています。
-
-```bash
-uv run --env-file .env jrg retry examples/retry_demo \
-  --about 'HTTPリクエスト失敗時に、ステータスによって再試行するか判断する処理' \
-  --json --stats
-```
-
-サンプルには、再試行の可否を決める `policy.py` と、キーワードだけが重なる `metrics.py` があります。実際の順位・確率は Jev の判定によります。
-
-## エージェントから使う
+`.jrgenv` をプロジェクトの `.gitignore` に追加してください。共有用の雛形は [.jrgenv.example](.jrgenv.example) です。
 
 ```bash
 jrg 'retry|backoff|429' src \
@@ -66,33 +41,57 @@ jrg 'retry|backoff|429' src \
   --json --top 8 --min-relevance 0.5
 ```
 
-stdout は JSON 配列のみ、警告・エラー・任意の統計は stderr に出力します。結果の例（確率は説明用）:
+認証の優先順位:
+
+1. 空でない環境変数 `TYPESAFE_API_KEY`
+2. `--env-file PATH` で明示した dotenv ファイル
+3. カレントディレクトリから Git ルートまでで最も近い `.jrgenv`
+
+Git 外ではカレントディレクトリだけを調べます。Git worktree にも対応します。`--no-env-file` はファイルからの読み込みを無効にします。通常の `.env` は自動では読みませんが、`jrg ... --env-file .env` で使用できます。
+
+dotenv の値を設定データとして読み、シェルとして実行しません。`TYPESAFE_API_KEY` 以外の設定をアプリケーションの環境変数に取り込みません。`.env` / `.env.*` / `.jrgenv` / `.jrgenv.*` と読み込み対象の認証ファイルは、`--hidden`、正の glob、明示的なファイル指定でも候補・出力・API 送信から除外します。これらのファイルへのシンボリックリンクも除外します。
+
+AGENTS.md への指示例は [docs/AGENTS.example.md](docs/AGENTS.example.md) にあります。意図から処理を探す場合は jrg、正確な識別子や文字列の全件検索には rg を使い分けます。
+
+## API を使わず試す
+
+```bash
+jrg retry examples/retry_demo \
+  --about 'HTTPリクエスト失敗時に、ステータスによって再試行するか判断する処理' \
+  --dry-run --json --stats
+```
+
+`--dry-run` は認証情報を読み込まず、通信もしません。収集した全候補を `relevance: null` で返し、`--top` と `--min-relevance` は適用しません。通常実行では、検索意図・候補のパス・行番号・ソース断片を TypeSafe API に送信します。
+
+サンプルは再試行の可否を決める `policy.py` と、キーワードが重なるだけの `metrics.py` です。Python ファイルは検索用データなので実行しません。
+
+## 出力と終了コード
+
+`--json` では stdout に JSON 配列、stderr に警告・エラーと任意の統計を出します。以下の確率は説明用です。
 
 ```json
 [
   {
-    "path": "src/policy.py",
+    "path": "src/policy.rs",
     "start_line": 1,
-    "end_line": 2,
+    "end_line": 3,
     "match_lines": [1],
-    "snippet": "def should_retry(status):\n    return status == 429 or status >= 500\n",
+    "snippet": "fn should_retry(status: u16) -> bool {\n    status == 429 || status >= 500\n}\n",
     "relevance": 0.97
   }
 ]
 ```
 
-`start_line` / `end_line` は両端を含む1始まりの行番号です。`match_lines` は一致があった行で、同じ行の複数一致は1行として扱います。パスは `rg` の出力を保持します（相対パスには `./` が付く場合があります）。JSON 内の日本語は Unicode エスケープされますが、JSON パーサーで元に戻ります。
+行番号は1始まり、範囲は両端を含みます。同じ行の複数一致は `match_lines` では1行として扱います。パスは rg の表記を保持します（相対パスに `./` が付く場合があります）。テキスト出力では一致行を `>` で示します。
 
-テキスト出力はスコア、パス、行範囲、ソースを表示し、一致行を `>` で示します。
-
-終了コード:
-
-| コード | 意味 |
+| 終了コード | 意味 |
 | --- | --- |
 | `0` | 結果あり |
 | `1` | キーワード一致なし、またはしきい値以上の結果なし |
-| `2` | 引数・検索・API エラー |
-| `130` | 中断 |
+| `2` | 引数・検索・認証・API エラー |
+| `130` | Ctrl-C による中断 |
+
+API の途中失敗では部分的な結果を出しません。実行中の HTTP 通信はタイムアウトまで終了を待つ場合があります。
 
 ## 主なオプション
 
@@ -100,60 +99,52 @@ stdout は JSON 配列のみ、警告・エラー・任意の統計は stderr �
 | --- | --- | --- |
 | `--about` / `--intent` | 必須 | 探している処理の説明 |
 | `-C`, `--context` | `5` | 一致行の前後の行数 |
-| `--top` | `10` | 返す上位件数 |
+| `-n`, `--top` | `10` | 返す上位件数 |
 | `--min-relevance` | `0` | Noul の下限。指定値を含む |
 | `--max-candidates` | `200` | 評価する候補数の上限 |
-| `--max-filesize` | `1M` | `rg` に渡すファイルサイズ制限 |
-| `-g`, `--glob` | なし | `rg` の glob。複数指定可 |
-| `-t`, `--type` | なし | `rg` の言語タイプ。複数指定可 |
+| `--max-filesize` | `1M` | rg のファイルサイズ制限 |
+| `-g`, `--glob` | なし | rg の glob。複数指定可 |
+| `-t`, `--type` | なし | rg の言語タイプ。複数指定可 |
 | `-i`, `-F`, `--hidden` | 無効 | 大小文字無視、リテラル検索、隠しファイルを含める |
 | `--json`, `--stats` | 無効 | JSON 結果、stderr の統計 |
-| `--dry-run` | 無効 | API を呼ばず候補を表示 |
-| `--batch-size` | `8` | 1リクエストの候補数上限 |
-| `--workers` | `4` | API の最大同時リクエスト数 |
-| `--timeout` | `30` | HTTP 通信のタイムアウト秒数 |
-| `--retries` | `2` | 429 / 503 / 529 応答の最大再試行回数 |
-| `--model` | `jev-latest` | TypeSafe のモデル名 |
-| `--api-url` | `https://api.typesafe.ai/v1/systemone` | API エンドポイント。localhost のみ HTTP も可 |
+| `--dry-run` | 無効 | ローカルで全候補を表示 |
+| `--env-file`, `--no-env-file` | 自動探索 | 認証ファイルを明示指定 / 読み込み無効 |
+| `--batch-size`, `--workers` | `8`, `4` | 1リクエストの候補数 / 最大同時リクエスト数 |
+| `--timeout`, `--retries` | `30`, `2` | HTTP タイムアウト秒数 / 過負荷の最大再試行回数 |
+| `--model` | `jev-latest` | TypeSafe モデル |
+| `--api-url` | `https://api.typesafe.ai/v1/systemone` | HTTPS エンドポイント。localhost のみ HTTP も可 |
 
-しきい値を既定で `0` にするのは、未検証のしきい値で必要な候補を落とさないためです。最初は top-K の順位を評価し、実タスクでしきい値を調整してください。
+既定のしきい値を `0` にして、未検証の確率で必要な候補を落とさないようにしています。まず top-K を評価し、自分のタスクでしきい値を調整してください。
 
-`rg` の通常の ignore・隠しファイル・バイナリ除外に従います。ただし **明示的なファイル指定や正の `--glob` は rg 本来の仕様どおり ignore 等に優先**します。サイズ制限も明示的なファイル指定では適用されないことがあります。除外を優先したい場合はディレクトリ指定と `--type`、負の glob（`-g '!secrets/**'` など）を使ってください。`RIPGREP_CONFIG_PATH` は無効化しているため、個人設定の `--pre` などは実行されません。stdin 検索や任意の rg オプションの透過転送はありません。
+認証ファイル以外は rg の ignore・隠しファイル・バイナリ除外に従います。明示ファイルや正の glob は rg 本来の仕様どおり ignore 等に優先し、明示ファイルにはサイズ上限が適用されない場合があります。除外を優先したい場合は、ディレクトリ指定・`--type`・負の glob を使ってください。個人用 `RIPGREP_CONFIG_PATH` は無効化しているため、`--pre` などの任意コマンドは実行しません。stdin 検索や任意の rg オプション転送は未対応です。
 
-## 候補と判定の設計
+## 設計と評価
 
-- `rg --json --context N --sort path` の出力をストリームで読み、同じファイルの連続した領域を統合します。ファイルを読み直さないので、検索直後の編集で一致位置と評価するソースが食い違うことを避けます。
-- 密集した一致がファイル全体に広がらないよう、候補を最大120行または UTF-8 12,000 bytes で分割します。分割境界では前後の文脈が短くなります。1行がサイズ上限を超える場合や、非 UTF-8 のソースを含む場合は明示的なエラーにします。
-- 候補上限を超えたことを確認した時点で `rg` を停止します。対象はパス・行順の先頭候補であり、全体の上位候補を保証しません。打ち切りは stderr と統計に明示します。
-- 1リクエストに複数候補を入れ、それぞれに独立した Noul を割り当てます。質問の ID 自体はモデルに渡らないため、質問本文に `candidates[i].snippet` を明示します。
-- 「検索意図の挙動を実装する、またはその理解に実質的に役立つか」を判定します。テストや文書も、それを探す意図なら関連ありにできます。候補間で確率を正規化する Choice は使いません。
-- リクエストは質問文と JSON エスケープを含む24,000 bytes 以内に制限します。日本語やコードを一定の文字/token 比で見積もらず、保守的なサイズ上限を使います。単独候補でも収まらなければエラーになります。
-- Noul の有限値 `0..1` を検証し、欠落や不正値があれば検索全体を失敗させます。同点はパス・開始行順に揃えます。API 障害から未評価結果への自動フォールバックは行いません。
-- 過負荷応答を短い指数バックオフで再試行します。数値の `Retry-After` を尊重し、30秒超や日時形式なら再実行を案内します。接続失敗は、課金を伴う重複実行を避けるため自動再試行しません。
+- rg の JSON をストリームで読み、ファイルを読み直さずに近接する領域を統合します。検索後の編集で一致位置とソースがずれることを避けます。
+- 1候補を120行または UTF-8 12,000 bytes で分割します。境界では前後の文脈が短くなります。1行が上限を超える場合と、非 UTF-8 のソース・パスはエラーにします。
+- 候補上限を超えた時点で rg を停止します。パス・行順の先頭候補が対象で、打ち切りは警告と統計に明示します。
+- 1候補に1つの独立した Noul を割り当て、「検索意図の処理を実装する、または理解に実質的に役立つか」を評価します。質問本文で対象の `candidates[i].snippet` を明示します。
+- シリアライズしたリクエスト全体を24,000 bytes 以内に分割します。文字数/token 比を固定せず、質問とソースを合わせて保守的に制限します。
+- 有限の `0..1` だけをスコアとして受理します。同点はパス・開始行順です。429 / 503 / 529 はバックオフで再試行します。数値の `Retry-After` に従い、30秒超や日時形式なら再実行を案内します。接続失敗は重複課金を避けるため自動再試行しません。
 
-HTTP 契約は [TypeSafe API reference](https://docs.typesafe.ai/api)、判定型は [Noul](https://docs.typesafe.ai/primitives/noul)、複数質問は [Primitives](https://docs.typesafe.ai/primitives) に基づきます（2026-09-20 確認）。
+`--stats` は候補数、一致行数、返却件数、候補/返却ソースの文字数、検索/rerank 時間、リクエスト数（再試行を含む）、API 入力トークン数、応答モデルを stderr の最後の JSON 行に出します。usage がなければ `input_tokens: null`、API 未使用なら `0` です。文字数はソース断片のみで、エージェントへ渡す JSON 全体のトークン数や課金額ではありません。
 
-## 評価と制約
+**Jev は rg が候補にしなかったコードを発見できません。** Noul は指定した質問への Yes 確率で、検索正解率の保証ではありません。AST による関数単位の展開・二段階 rerank・MCP サーバーは未対応です。
 
-`--stats` は候補数、一致行数、返却件数、候補/返却ソースの文字数、検索/rerank 時間、API リクエスト数（再試行を含む）、API が返した入力トークン数、応答モデル名を stderr の最後の JSON 行に出します。usage がない場合の `input_tokens` は `null` です。API 未使用なら `0` です。
+HTTP 契約は [TypeSafe API](https://docs.typesafe.ai/api)、判定型は [Noul](https://docs.typesafe.ai/primitives/noul) に基づきます。小規模な実 API 検証は [評価記録](docs/evaluation.md) を参照してください。
 
-文字数はソース断片だけの量です。LLM に渡す JSON 全体のトークン数や課金額を表すものではありません。比較実験では同じ検索意図・候補に対し、`--dry-run --json` と通常実行の結果を保存して、必要なコードが top-K に残るかを確認してください。
-
-Jev は **rg が候補にしなかったコードを発見できません**。必要なら正規表現の選択肢や検索パスを増やしてください。Noul は指定した質問への Yes 確率であり、コード検索での正解率の保証ではありません。
-
-## 開発・テスト
+## 開発
 
 ```bash
-python3 -m unittest discover -v
-uvx ruff check .
-uvx ruff format --check .
-uv build
+cargo fmt --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+cargo build --release --locked
+cargo publish --dry-run --locked
 ```
 
-テストは実際の `rg` とローカル HTTP サーバーで、候補統合、上限、ignore、API 契約、順位付け、しきい値、再試行、異常応答、CLI の終了コードを検証します。API キーは不要で、実サービスへの通信はありません。Jev 本番環境での疎通・検索品質は、自分のキーと実タスクで別途確認してください。
+テストは Rust、実際の rg、ローカル HTTP サーバーで完結し、API キーや Python は不要です。公開手順は [docs/releasing.md](docs/releasing.md) にあります。
 
-```text
-jrg/search.py  候補の作成と rg プロセス管理
-jrg/jev.py     Noul リクエスト、バッチ化、順位付け
-jrg/cli.py     引数、出力、統計
-```
+v0.2 は Python プロトタイプの CLI・JSON フィールド・終了コードを引き継ぎます。JSON の Unicode は UTF-8 で出力するため、エスケープ表記は異なる場合があります。非 UTF-8 パスは曖昧な位置を返さず、明示的なエラーに変更しています。Python 版は Git 履歴の `cb88653` に残っています。
+
+MIT License.

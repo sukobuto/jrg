@@ -1,0 +1,76 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust target
+        run: |
+          rustup update stable --no-self-update
+          rustup target add ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Archive (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          mkdir archive
+          cp "target/$BUILD_TARGET/release/jrg" README.md LICENSE archive/
+          tar -czf "jrg-$RELEASE_TAG-$BUILD_TARGET.tar.gz" -C archive .
+      - name: Archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          New-Item -ItemType Directory archive
+          Copy-Item "target/$env:BUILD_TARGET/release/jrg.exe", README.md, LICENSE archive/
+          Compress-Archive -Path archive/* -DestinationPath "jrg-$env:RELEASE_TAG-$env:BUILD_TARGET.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jrg-${{ matrix.target }}
+          path: |
+            jrg-*.tar.gz
+            jrg-*.zip
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create release and checksums
+        working-directory: artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          sha256sum jrg-* > SHA256SUMS
+          gh release create "$RELEASE_TAG" --verify-tag --generate-notes ./*

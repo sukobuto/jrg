@@ -6,4 +6,9 @@ build/
 dist/
 .ruff_cache/
 .env
+.env.*
+.jrgenv
+.jrgenv.*
+!.jrgenv.example
+/target/
 graphify-out/
