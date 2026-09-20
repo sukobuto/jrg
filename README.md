@@ -17,9 +17,11 @@ rg --json → 前後5行の候補 → 近接領域を統合 → Jev Noul → 上
 brew install sukobuto/tap/jrg
 
 # Cargo（Rust 1.88 以上）
-cargo install jrg --locked
+cargo install --git https://github.com/sukobuto/jrg --tag v0.2.0 --locked
 # rg が未導入なら別途インストールしてください
 ```
+
+crates.io への公開は認証情報の更新待ちです。公開後は `cargo install jrg --locked` でもインストールできます。
 
 ビルド済みバイナリは [GitHub Releases](https://github.com/sukobuto/jrg/releases) から取得できます。アーカイブを展開して `jrg`（Windows は `jrg.exe`）を PATH の通った場所に置いてください。
 
